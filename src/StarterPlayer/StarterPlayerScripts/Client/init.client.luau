@@ -15,6 +15,7 @@ local CONTROLLER_ORDER = {
 	"MeltController",
 	"IndexController",
 	"HeistController",
+	"ChatTagController",
 }
 
 local loaded = {}

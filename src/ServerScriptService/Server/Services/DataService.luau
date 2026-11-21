@@ -30,7 +30,10 @@ local stateChanged: RemoteEvent
 
 -- Migrations: MIGRATIONS[n] upgrades data from version n to n + 1.
 local MIGRATIONS: { [number]: (data: any) -> () } = {
-	-- [1] = function(data) data.NewField = 0 end,
+	-- v1 -> v2 (M5): receipt log for idempotent developer-product purchases.
+	[1] = function(data)
+		data.ProcessedReceipts = data.ProcessedReceipts or {}
+	end,
 }
 
 local function log(...: any)
@@ -65,6 +68,7 @@ local function publicState(data: PlayerData)
 		CritterCount = #data.Critters,
 		Skins = data.Skins,
 		IndexDiscovered = data.IndexDiscovered,
+		StarterPackBought = data.StarterPackBought,
 		Stats = data.Stats,
 		GrowthBoostEndsAt = data.GrowthBoostEndsAt,
 	}
@@ -168,6 +172,14 @@ end
 -- LastOnline as it was when this session started (0 for a new player). For offline earnings.
 function DataService.getPreviousLastOnline(player: Player): number
 	return previousLastOnline[player] or 0
+end
+
+-- Yields until the player's profile is loaded (or they leave / timeout). For receipt handling.
+function DataService.waitForProfile(player: Player, timeout: number?): any
+	if DataService.waitForData(player, timeout) then
+		return profiles[player]
+	end
+	return nil
 end
 
 -- Raw ProfileStore profile. Only ShopService should need this (receipt handling).

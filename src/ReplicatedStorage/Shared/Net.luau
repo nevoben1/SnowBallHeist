@@ -41,6 +41,7 @@ Net.Attributes = {
 	Skin = "Skin", -- equipped skin id
 	OnFoot = "OnFoot", -- true inside the village: walking, snowball parked at the igloo gate
 	InPlot = "InPlot", -- name of the plot the player is standing in ("" if none)
+	Vip = "Vip", -- owns the VIP gamepass (chat tag, trail)
 }
 
 -- Collision groups (registered by the server in BaseService.init).

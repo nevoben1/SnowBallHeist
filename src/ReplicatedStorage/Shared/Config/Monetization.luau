@@ -65,6 +65,20 @@ local Monetization = {
 	coinPackMinutes = { CoinPackS = 10, CoinPackM = 40, CoinPackL = 150, CoinPackXL = 600 } :: { [string]: number },
 	starterPackGrowthBoostSeconds = 10 * 60,
 	starterPackCritterRarity = "Rare",
+	-- The Bunny Slope Rare: a real boost for a new player without skipping the early game.
+	starterPackCritterId = "FrostHedgehog",
+
+	-- Coin Packs pay "minutes of current income"; brand-new players earn ~0/s, so use at least this.
+	coinPackMinIncomePerSecond = 10,
+
+	-- Receipts remembered per player to make ProcessReceipt idempotent (oldest dropped beyond this).
+	maxStoredReceipts = 200,
+	-- How long ProcessReceipt waits for the profile save before telling Roblox to retry later.
+	receiptSaveTimeoutSeconds = 20,
+
+	vipChatTag = "[VIP]",
+	vipChatTagColor = { 255, 215, 90 },
+	vipTrailColor = { 255, 215, 90 },
 }
 
 return Monetization

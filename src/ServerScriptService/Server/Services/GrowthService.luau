@@ -15,6 +15,7 @@ local Formulas = require(Shared.Formulas)
 local Net = require(Shared.Net)
 local Signal = require(Shared.Signal)
 local DataService = require(script.Parent.DataService)
+local GamePassService = require(script.Parent.GamePassService)
 local DevHooks = require(script.Parent.Parent.Util.DevHooks)
 
 type PlayerData = DataTemplate.PlayerData
@@ -108,9 +109,20 @@ function GrowthService.init()
 	GrowthService.registerMultiplier("GrowthBoost", function(_player, data)
 		return if os.time() < data.GrowthBoostEndsAt then Config.Events.growthBoostMultiplier else 1
 	end)
+	GrowthService.registerMultiplier("TwoXGrowth", function(player)
+		return if GamePassService.has(player, "TwoXGrowth")
+			then Config.Monetization.twoXGrowthMultiplier
+			else 1
+	end)
 end
 
 function GrowthService.start()
+	GamePassService.Changed:Connect(function(player)
+		local data = DataService.getData(player)
+		if data then
+			GrowthService.setSize(player, data.Size) -- re-sends GrowthPerSecond
+		end
+	end)
 	DataService.ProfileLoaded:Connect(function(player, data)
 		player:SetAttribute(Net.Attributes.Size, data.Size)
 		DataService.pushState(player, { GrowthPerSecond = GrowthService.getGrowthPerSecond(player) })

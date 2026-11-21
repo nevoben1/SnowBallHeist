@@ -13,6 +13,7 @@ local Services = script.Services
 
 local SERVICE_ORDER = {
 	"DataService",
+	"GamePassService",
 	"GrowthService",
 	"ZoneService",
 	"CritterService",
@@ -21,7 +22,7 @@ local SERVICE_ORDER = {
 	"RebirthService",
 	"LeaderboardService",
 	"StealService",
-	-- M5: "ShopService"
+	"ShopService",
 	-- M6: "EventService", "CodeService", "AdminService"
 }
 

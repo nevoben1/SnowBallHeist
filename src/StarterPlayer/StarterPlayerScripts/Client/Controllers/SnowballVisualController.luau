@@ -36,6 +36,7 @@ type Ball = {
 	carriedModels: { Model },
 	skin: string,
 	parked: boolean?, -- nil until the first frame, so the first state always applies
+	trail: Trail?,
 }
 
 -- A jump bigger than this many radii in one frame is a teleport/respawn, not rolling.
@@ -230,6 +231,36 @@ local function syncCarried(player: Player, ball: Ball)
 	end
 end
 
+-- VIP trail (spec §9). Attachments sit inside the ball, so the trail follows it as it rolls.
+local function syncTrail(player: Player, ball: Ball)
+	local wanted = player:GetAttribute(Net.Attributes.Vip) == true
+	local trail = ball.trail
+	if trail and trail.Parent ~= ball.part then
+		trail = nil -- the ball part was rebuilt (skin change)
+		ball.trail = nil
+	end
+	if wanted and not trail then
+		local top = Instance.new("Attachment")
+		top.Position = Vector3.new(0, 0.3, 0)
+		top.Parent = ball.part
+		local bottom = Instance.new("Attachment")
+		bottom.Position = Vector3.new(0, -0.3, 0)
+		bottom.Parent = ball.part
+		local c = Config.Monetization.vipTrailColor
+		local newTrail = Instance.new("Trail")
+		newTrail.Attachment0 = top
+		newTrail.Attachment1 = bottom
+		newTrail.Color = ColorSequence.new(Color3.fromRGB(c[1], c[2], c[3]))
+		newTrail.Transparency = NumberSequence.new(0.2, 1)
+		newTrail.Lifetime = 0.6
+		newTrail.Parent = ball.part
+		ball.trail = newTrail
+	elseif trail and not wanted then
+		trail:Destroy()
+		ball.trail = nil
+	end
+end
+
 local function placeCarried(ball: Ball, center: Vector3)
 	local distance = ball.radius * Config.Visuals.carriedEmbed
 	local base = CFrame.new(center) * ball.rotation
@@ -331,6 +362,7 @@ local function updateBall(player: Player, dt: number)
 	ball.part.CFrame = CFrame.new(center) * ball.rotation
 	syncCarried(player, ball)
 	placeCarried(ball, center)
+	syncTrail(player, ball)
 
 	-- Camera settings only change with the radius (or a fresh Humanoid after respawn).
 	if player == localPlayer and not onFoot and (resized or modeChanged) then

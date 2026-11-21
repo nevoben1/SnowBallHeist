@@ -3,7 +3,7 @@
 -- second, the next Ice Gate, coins, carry slots, and short toasts from the server's Notify remote.
 --
 -- Expects StarterGui.Hud (ScreenGui) with these descendants (any nesting, found by name):
---   SizeLabel, GrowthLabel, NextZoneLabel, CoinsLabel, CarryLabel, ToastLabel (all TextLabels)
+--   SizeLabel, GrowthLabel, NextZoneLabel, CoinsLabel, CarryLabel, LuckLabel, ToastLabel (TextLabels)
 -- If StarterGui.Hud is missing, a plain placeholder HUD is built so M1 can be tested.
 
 local Players = game:GetService("Players")
@@ -27,6 +27,7 @@ local nextZoneLabel: TextLabel? = nil
 local toastLabel: TextLabel? = nil
 local coinsLabel: TextLabel? = nil
 local carryLabel: TextLabel? = nil
+local luckLabel: TextLabel? = nil
 local lastSize: number? = nil
 local toastToken = 0
 
@@ -88,6 +89,14 @@ local function buildPlaceholder(playerGui: PlayerGui): ScreenGui
 		Position = UDim2.fromOffset(12, 46),
 		Size = UDim2.fromOffset(200, 28),
 		TextXAlignment = Enum.TextXAlignment.Left,
+		Text = "",
+	})
+	label(gui, "LuckLabel", {
+		Position = UDim2.fromOffset(12, 78),
+		Size = UDim2.fromOffset(260, 24),
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextColor3 = Color3.fromRGB(160, 220, 255),
+		Visible = false,
 		Text = "",
 	})
 	label(gui, "ToastLabel", {
@@ -208,6 +217,25 @@ function HudController.start()
 	toastLabel = findLabel(found, "ToastLabel")
 	coinsLabel = findLabel(found, "CoinsLabel")
 	carryLabel = findLabel(found, "CarryLabel")
+	luckLabel = findLabel(found, "LuckLabel")
+
+	-- Blizzard Luck countdown from the server-set workspace attribute (server clock).
+	task.spawn(function()
+		while true do
+			local label = luckLabel
+			if label then
+				local endsAt = workspace:GetAttribute("ServerLuckEndsAt")
+				local remaining = if typeof(endsAt) == "number"
+					then endsAt - workspace:GetServerTimeNow()
+					else 0
+				label.Visible = remaining > 0
+				if remaining > 0 then
+					label.Text = "Blizzard Luck " .. Format.clock(remaining)
+				end
+			end
+			task.wait(1)
+		end
+	end)
 
 	StateController.Changed:Connect(render)
 	Net.event("Notify").OnClientEvent:Connect(showToast)

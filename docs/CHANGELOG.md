@@ -1,5 +1,39 @@
 # Changelog
 
+## M5 — Monetize
+
+**Added**
+- `GamePassService`: checks ownership once per player on join (cached), re-checks on `PromptGamePassPurchaseFinished`, and fires a `Changed` signal so services refresh. Passes with id 0 are skipped with one warning each. Sets the `Vip` attribute and pushes `Passes` to the client.
+- Pass effects:
+  - **2x Growth:** a growth multiplier.
+  - **2x Coins:** income ×2.
+  - **VIP:** 90 s lock, gold `[VIP]` chat tag (TextChatService), gold snowball trail.
+  - **+2 Carry Slots.**
+  - **Auto-Collect:** pedestal income goes straight to coins every tick.
+- `ShopService`: `MarketplaceService.ProcessReceipt` following CLAUDE.md rule 4:
+  - only granted once the profile is loaded;
+  - idempotent by `PurchaseId` (stored in the profile and capped at 200 entries);
+  - `PurchaseGranted` is returned only after `OnAfterSave` confirms a save containing that id. Otherwise it returns `NotProcessedYet`, and the retry is safe.
+- Products:
+  - **Blizzard Luck:** a server-wide 3× non-Common spawn weight for 15 min, stacking, announced to everyone, with a HUD countdown.
+  - **Coin Packs S/M/L/XL:** 10/40/150/600 minutes of current income.
+  - **Starter Pack:** a Frost Hedgehog onto a pedestal plus 10 min of 2× growth, once.
+- `Shared/Purchases.luau` (pure, Lune-tested): timer stacking, coin pack reward, receipt log.
+- **Data v2:** `ProcessedReceipts` field, with a v1→v2 migration in `DataService` (`CURRENT_VERSION = 2`).
+- Shop panel: Gamepasses and Boosts sections showing price, "Owned" or "Soon" (id 0). Buying opens Roblox's purchase prompt.
+- Dev hooks: `GrantPass(player, key[, false])`, `SimulatePurchase(player, productKey[, purchaseId])`. `SimulatePurchase` runs the real receipt handler, so the same `purchaseId` twice tests idempotency.
+- Lune tests: 50 passing.
+
+**Before launch, on the Creator Dashboard:** create the 5 gamepasses and 6 developer products, then paste their ids into `Config/Monetization.luau`. Until then the Shop shows "Soon", and Studio prints one warning per item.
+
+**Expects in the place file:** `StarterGui.Hud` may also have a `LuckLabel` (TextLabel); otherwise the placeholder HUD makes one. TextChatService must be the chat version for VIP tags; it's Roblox's default.
+
+**Known issues / notes (please confirm)**
+- **Coin Pack floor:** a brand-new player earns about 0 coins/s, so "minutes of current income" would pay 0. Packs use at least `coinPackMinIncomePerSecond = 10` (Coin Pack S pays at least 6,000). Change it in `Config/Monetization.luau`.
+- **Starter Pack critter:** the spec says "a Rare critter", and I picked the Bunny Slope Rare (Frost Hedgehog, 15 coins/s). If pedestals are full, its sell value is paid instead, so a paid item is never lost.
+- The Starter Pack is limited to once in the UI and by `StarterPackBought`. A receipt that arrives anyway (e.g. bought on another device) is still granted, since the player paid for it.
+- Real purchases can only be tested in a published place with real ids. `SimulatePurchase` exercises the same grant, save and idempotency path.
+
 ## M4 — Heist
 
 **Added**

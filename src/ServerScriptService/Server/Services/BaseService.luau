@@ -31,6 +31,7 @@ local Net = require(Shared.Net)
 local Signal = require(Shared.Signal)
 local CritterService = require(script.Parent.CritterService)
 local DataService = require(script.Parent.DataService)
+local GamePassService = require(script.Parent.GamePassService)
 local DevHooks = require(script.Parent.Parent.Util.DevHooks)
 local MapLocator = require(script.Parent.Parent.Util.MapLocator)
 local RateLimiter = require(script.Parent.Parent.Util.RateLimiter)
@@ -247,19 +248,22 @@ end
 
 -- Income ----------------------------------------------------------------------------------------
 
-local function critterIncome(data: PlayerData, critterId: string, mutation: string): number
+local function coinMultiplier(player: Player): number
+	return if GamePassService.has(player, "TwoXCoins") then Config.Monetization.twoXCoinsMultiplier else 1
+end
+
+local function critterIncome(player: Player, data: PlayerData, critterId: string, mutation: string): number
 	local def = Config.Critters.byId[critterId]
 	local mutationDef = Config.Critters.mutations[mutation :: any]
 	if not def then
 		return 0
 	end
-	-- 2x Coins gamepass (M5) multiplies in here.
 	return Formulas.critterIncome(
 		Config.Economy,
 		def.coinsPerSecond,
 		if mutationDef then mutationDef.incomeMultiplier else 1,
 		data.Melts,
-		1
+		coinMultiplier(player)
 	)
 end
 
@@ -285,7 +289,7 @@ function BaseService.getIncomePerSecond(player: Player): number
 		Config.Critters.mutations,
 		presentCritters(data),
 		data.Melts,
-		1
+		coinMultiplier(player)
 	)
 end
 
@@ -678,8 +682,8 @@ local function lockBase(player: Player)
 	if state ~= "Unlocked" then
 		return
 	end
-	-- VIP gamepass (M5) gets the longer lock.
-	plot.lockedUntil, plot.cooldownUntil = HeistRules.lockTimes(Config.Economy, time, false)
+	plot.lockedUntil, plot.cooldownUntil =
+		HeistRules.lockTimes(Config.Economy, time, GamePassService.has(player, "VIP"))
 	setBarrier(plot, true)
 	notify:FireClient(player, "Locked", "Igloo locked!")
 	local lockedUntil = plot.lockedUntil
@@ -723,9 +727,9 @@ local function incomeTick()
 		end
 		local seconds = Config.Economy.tickSeconds
 		for _, critter in presentCritters(data) do
-			critter.Pending += critterIncome(data, critter.CritterId, critter.Mutation) * seconds
+			critter.Pending += critterIncome(player, data, critter.CritterId, critter.Mutation) * seconds
 		end
-		if onPad[player] then
+		if onPad[player] or GamePassService.has(player, "AutoCollect") then
 			collect(player, false) -- standing on the pad keeps collecting quietly
 		else
 			updatePadLabel(player, data)
@@ -874,6 +878,7 @@ function BaseService.start()
 		holdStarted[player] = nil
 		releasePlot(player)
 	end)
+	GamePassService.Changed:Connect(BaseService.refresh) -- income rate
 
 	task.spawn(function()
 		while true do

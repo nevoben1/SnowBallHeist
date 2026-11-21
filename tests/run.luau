@@ -9,6 +9,7 @@ local ok = TestKit.run({
 	Format = require("./Format.spec"),
 	Formulas = require("./Formulas.spec"),
 	HeistRules = require("./HeistRules.spec"),
+	Purchases = require("./Purchases.spec"),
 })
 
 process.exit(if ok then 0 else 1)

@@ -24,6 +24,7 @@ local Format = require(Shared.Format)
 local Formulas = require(Shared.Formulas)
 local Net = require(Shared.Net)
 local DataService = require(script.Parent.DataService)
+local GamePassService = require(script.Parent.GamePassService)
 local DevHooks = require(script.Parent.Parent.Util.DevHooks)
 local MapLocator = require(script.Parent.Parent.Util.MapLocator)
 
@@ -64,6 +65,22 @@ local worldFolder: Folder
 local rayIgnore: { Instance } = {} -- critters + Ice Gates, so nothing spawns on top of a gate
 local notify: RemoteEvent
 local random = Random.new()
+-- Blizzard Luck (spec §9): server-wide, workspace:GetServerTimeNow() it runs until.
+local serverLuckEndsAt = 0
+
+local function luckMultiplier(): number
+	-- Blizzard Admin (M6) multiplies in here too.
+	return if workspace:GetServerTimeNow() < serverLuckEndsAt
+		then Config.Monetization.blizzardLuckMultiplier
+		else 1
+end
+
+-- Adds Blizzard Luck time (stacks). The workspace attribute lets every client show a countdown.
+function CritterService.addServerLuck(seconds: number): number
+	serverLuckEndsAt = math.max(workspace:GetServerTimeNow(), serverLuckEndsAt) + seconds
+	workspace:SetAttribute("ServerLuckEndsAt", serverLuckEndsAt)
+	return serverLuckEndsAt
+end
 
 -- Mutations to roll, rarest (highest multiplier) first, as Formulas.rollMutation expects.
 local mutationOrder = {}
@@ -126,7 +143,7 @@ local function spawnOne(spawner: ZoneSpawner)
 		spawner.pool,
 		Config.Critters.rarityWeights,
 		Config.Critters.rarityOrder,
-		1, -- luck: server luck (M5) and events (M6) plug in here
+		luckMultiplier(),
 		random:NextNumber(),
 		random:NextNumber()
 	)
@@ -258,8 +275,10 @@ function CritterService.getCarrySlots(player: Player): number
 	if not data then
 		return 0
 	end
-	-- +2 Carry Slots gamepass (M5) adds its bonus here.
-	return Formulas.carrySlots(Config.Economy, data.Upgrades.CarrySlots, 0)
+	local bonus = if GamePassService.has(player, "ExtraCarrySlots")
+		then Config.Monetization.extraCarrySlots
+		else 0
+	return Formulas.carrySlots(Config.Economy, data.Upgrades.CarrySlots, bonus)
 end
 
 function CritterService.getCarried(player: Player): { Carried }
@@ -396,6 +415,7 @@ function CritterService.start()
 		carried[player] = {}
 		syncCarried(player)
 	end)
+	GamePassService.Changed:Connect(CritterService.refresh) -- carry slots
 	Players.PlayerRemoving:Connect(function(player)
 		carried[player] = nil -- spec §12: unbanked critters are lost
 		lastNotice[player] = nil

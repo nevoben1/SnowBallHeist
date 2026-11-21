@@ -26,10 +26,11 @@ export type PlayerData = {
 	Skins: { Owned: { [string]: boolean }, Equipped: string },
 	GrowthBoostEndsAt: number, -- os.time(); 0 = none
 	LastOnline: number, -- os.time() of last save; 0 = new player
+	ProcessedReceipts: { [string]: number }, -- PurchaseId -> os.time() granted (v2)
 	Stats: { TotalSteals: number, TimesStolenFrom: number, BiggestSize: number },
 }
 
-local CURRENT_VERSION = 1
+local CURRENT_VERSION = 2
 
 local template: PlayerData = {
 	DataVersion = CURRENT_VERSION,
@@ -45,6 +46,7 @@ local template: PlayerData = {
 	Skins = { Owned = { Default = true }, Equipped = "Default" },
 	GrowthBoostEndsAt = 0,
 	LastOnline = 0,
+	ProcessedReceipts = {},
 	Stats = { TotalSteals = 0, TimesStolenFrom = 0, BiggestSize = 0 },
 }
 
