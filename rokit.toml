@@ -1,0 +1,8 @@
+# Toolchain, managed by Rokit (https://github.com/rojo-rbx/rokit).
+# Install everything with:  rokit install
+# Versions were the latest on GitHub when scaffolded (Nov 2026); bump with `rokit update` if newer exist.
+[tools]
+rojo = "rojo-rbx/rojo@7.7.1"
+selene = "Kampfkarren/selene@0.32.0"
+stylua = "JohnnyMorganz/StyLua@2.6.0"
+lune = "lune-org/lune@0.11.1"

@@ -1,0 +1,6 @@
+std = "roblox"
+exclude = ["src/ServerScriptService/Server/Vendor/*"]
+
+[lints]
+unused_variable = "warn"
+shadowing = "allow"
