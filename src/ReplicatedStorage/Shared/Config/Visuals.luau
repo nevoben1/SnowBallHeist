@@ -39,6 +39,9 @@ return {
 	-- Base
 	baseLabelMaxDistance = 250,
 	lockedPedestalTransparency = 0.8, -- pedestals not bought yet
+	barrierColor = { 160, 215, 255 }, -- ice barrier on a locked igloo
+	barrierTransparency = 0.35,
+	stolenCritterHeight = 1.5, -- studs above the thief's head
 
 	-- HUD
 	growthPopupSeconds = 0.8, -- the "+1" that floats off the size counter each tick

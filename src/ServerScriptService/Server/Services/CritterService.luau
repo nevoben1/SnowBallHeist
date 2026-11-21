@@ -5,6 +5,8 @@
 --   * Absorbing is a server distance check (never physics): a critter inside a snowball's visual
 --     radius is absorbed if the player is big enough and has a free carry slot.
 --   * Carried critters are session-only (spec §12): lost if the player leaves before banking.
+--   * Bumped-off critters pop loose (spec §7): anyone can grab them (no size needed) for a few
+--     seconds, then they vanish.
 --
 -- Expects (optional per zone): Workspace.Map.Zones.<folderName>.CritterSpawns (Folder of BaseParts).
 -- Critters spawn on top of a random spawn part; without that folder they spawn at a random spot
@@ -36,6 +38,9 @@ type LiveCritter = {
 	model: Model,
 	position: Vector3,
 	zoneId: string,
+	loose: boolean, -- popped off a bumped snowball: no size requirement, despawns
+	grabbableAt: number, -- os.clock()
+	expiresAt: number, -- os.clock(); math.huge for normal spawns
 }
 
 type ZoneSpawner = {
@@ -50,6 +55,8 @@ type ZoneSpawner = {
 local CritterService = {}
 
 local spawners: { ZoneSpawner } = {}
+-- Loose critters live in their own bucket so they never count toward a zone's live limit.
+local looseBucket: ZoneSpawner
 local carried: { [Player]: { Carried } } = {}
 local lastNotice: { [Player]: { [string]: number } } = {}
 local warnedAboutLeaving: { [Player]: boolean } = {}
@@ -146,8 +153,42 @@ local function spawnOne(spawner: ZoneSpawner)
 		model = model,
 		position = center,
 		zoneId = spawner.zone.id,
+		loose = false,
+		grabbableAt = 0,
+		expiresAt = math.huge,
 	}
 	spawner.liveCount += 1
+end
+
+-- Spec §7: a critter knocked off a bumped snowball. Anyone can grab it until it expires.
+function CritterService.spawnLoose(critterId: string, mutation: string, position: Vector3)
+	local def = Config.Critters.byId[critterId]
+	if not def then
+		return
+	end
+	local model = CritterLook.build(critterId, mutation)
+	local _, extents = model:GetBoundingBox()
+	local center = position + Vector3.new(0, extents.Y / 2, 0)
+	model:PivotTo(CFrame.new(center))
+	CritterLook.label(model, critterId, mutation, false)
+	model:SetAttribute("CritterId", critterId)
+	model:SetAttribute("Mutation", mutation)
+	model:SetAttribute("Loose", true)
+	model.Parent = worldFolder
+	local uid = HttpService:GenerateGUID(false)
+	local now = os.clock()
+	looseBucket.live[uid] = {
+		uid = uid,
+		def = def,
+		mutation = mutation,
+		model = model,
+		position = center,
+		zoneId = "Loose",
+		loose = true,
+		grabbableAt = now + Config.Economy.looseGrabDelaySeconds,
+		expiresAt = now + Config.Economy.looseCritterSeconds,
+	}
+	looseBucket.liveCount += 1
 end
 
 local function despawn(spawner: ZoneSpawner, critter: LiveCritter)
@@ -285,6 +326,9 @@ local function checkAbsorb(player: Player)
 	if not (data and root and root:IsA("BasePart") and humanoid and carried[player]) then
 		return
 	end
+	if player:GetAttribute(Net.Attributes.OnFoot) == true then
+		return -- on foot in the village: the snowball is parked at the igloo
+	end
 
 	-- Same sphere the client draws (SnowballVisualController): sitting on the ground at the feet.
 	local radius = Formulas.visualRadius(Config.Economy, data.Size)
@@ -292,12 +336,13 @@ local function checkAbsorb(player: Player)
 	local center = Vector3.new(root.Position.X, feetY + radius, root.Position.Z)
 	local reach = radius + Config.Economy.absorbReachPadding
 
+	local now = os.clock()
 	for _, spawner in spawners do
 		for _, critter in spawner.live do
-			if (critter.position - center).Magnitude > reach then
+			if (critter.position - center).Magnitude > reach or now < critter.grabbableAt then
 				continue
 			end
-			if data.Size < critter.def.sizeRequired then
+			if not critter.loose and data.Size < critter.def.sizeRequired then
 				noticeOnce(
 					player,
 					"TooSmall",
@@ -326,6 +371,15 @@ function CritterService.init()
 	worldFolder.Parent = workspace
 	table.insert(rayIgnore, worldFolder)
 	resolveSpawners()
+	looseBucket = {
+		zone = Config.Zones[1],
+		pool = {},
+		bounds = nil,
+		spawnParts = {},
+		live = {},
+		liveCount = 0,
+	}
+	table.insert(spawners, looseBucket) -- absorb checks scan it like any zone
 	groundParams.FilterDescendantsInstances = rayIgnore
 
 	-- game.ServerStorage.DevHooks.GiveCritter:Invoke(game.Players.YourName, "PineFox", "Golden")
@@ -349,6 +403,9 @@ function CritterService.start()
 	end)
 
 	for _, spawner in spawners do
+		if spawner == looseBucket then
+			continue -- loose critters only come from bumps
+		end
 		for _ = 1, spawner.zone.maxLiveCritters do
 			spawnOne(spawner)
 		end
@@ -365,6 +422,12 @@ function CritterService.start()
 	task.spawn(function()
 		while true do
 			task.wait(Config.Economy.absorbCheckSeconds)
+			local now = os.clock()
+			for _, critter in looseBucket.live do
+				if now >= critter.expiresAt then
+					despawn(looseBucket, critter)
+				end
+			end
 			for _, player in Players:GetPlayers() do
 				checkAbsorb(player)
 			end

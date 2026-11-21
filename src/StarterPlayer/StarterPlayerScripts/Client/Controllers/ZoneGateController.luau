@@ -3,6 +3,9 @@
 -- you've earned: they go see-through and non-solid for you only. The server still checks zone
 -- Bounds (ZoneService), so a client that cheats past a gate gets sent back.
 --
+-- Instance streaming can remove a gate and bring back a fresh copy, which drops any local
+-- changes. So nothing is cached: every refresh re-finds the gates and re-applies their state.
+--
 -- Expects: Workspace.Map.Zones.<folderName>.IceGate (BasePart or Model) for zones with a size
 -- requirement. Built automatically by the server's placeholder map in Studio.
 
@@ -14,25 +17,23 @@ local Format = require(Shared.Format)
 local Signal = require(Shared.Signal)
 local StateController = require(script.Parent.StateController)
 
-type Gate = {
-	zone: typeof(Config.Zones[1]),
-	parts: { BasePart },
-	original: { [BasePart]: { transparency: number, canCollide: boolean } },
-	label: BillboardGui?,
-	open: boolean,
-}
-
 local ZoneGateController = {}
 
 -- Fires (zoneId) when a gate shatters for this player. Hook for VFX/sound in M6.
 ZoneGateController.GateShattered = Signal.new() :: Signal.Signal<string>
 
-local gates: { Gate } = {}
+-- How often gates are re-checked (catches gates that stream in).
+local REFRESH_SECONDS = 0.5
 
--- How long to wait for the server to create Workspace.Map before giving up.
-local MAP_WAIT_SECONDS = 15
+-- Each part's own look before we touched it (weak: streamed-out parts are forgotten).
+local originals: { [BasePart]: { transparency: number, canCollide: boolean } } = setmetatable(
+	{},
+	{ __mode = "k" }
+) :: any
+local openZones: { [string]: boolean } = {}
+local warned: { [string]: boolean } = {}
 
-local function collectParts(root: Instance): { BasePart }
+local function gateParts(root: Instance): { BasePart }
 	local parts = {}
 	if root:IsA("BasePart") then
 		table.insert(parts, root)
@@ -45,13 +46,17 @@ local function collectParts(root: Instance): { BasePart }
 	return parts
 end
 
-local function makeLabel(gate: Gate, root: Instance): BillboardGui?
+local function ensureLabel(zone: typeof(Config.Zones[1]), root: Instance, parts: { BasePart }): BillboardGui?
 	local adornee: BasePart? = if root:IsA("BasePart")
 		then root
 		elseif root:IsA("Model") and root.PrimaryPart then root.PrimaryPart
-		else gate.parts[1]
+		else parts[1]
 	if not adornee then
 		return nil
+	end
+	local existing = adornee:FindFirstChild("GateLabel")
+	if existing and existing:IsA("BillboardGui") then
+		return existing
 	end
 	local billboard = Instance.new("BillboardGui")
 	billboard.Name = "GateLabel"
@@ -68,29 +73,11 @@ local function makeLabel(gate: Gate, root: Instance): BillboardGui?
 	text.TextScaled = true
 	text.TextColor3 = Color3.new(1, 1, 1)
 	text.TextStrokeTransparency = 0.3
-	text.Text = string.format("%s\nSize %s", gate.zone.displayName, Format.number(gate.zone.sizeRequired))
+	text.Text = string.format("%s\nSize %s", zone.displayName, Format.number(zone.sizeRequired))
 	text.Parent = billboard
 
 	billboard.Parent = adornee
 	return billboard
-end
-
-local function setOpen(gate: Gate, open: boolean)
-	if gate.open == open then
-		return
-	end
-	gate.open = open
-	for _, part in gate.parts do
-		local original = gate.original[part]
-		part.CanCollide = if open then false else original.canCollide
-		part.Transparency = if open then 1 else original.transparency
-	end
-	if gate.label then
-		gate.label.Enabled = not open
-	end
-	if open then
-		ZoneGateController.GateShattered:Fire(gate.zone.id)
-	end
 end
 
 local function refresh()
@@ -98,58 +85,75 @@ local function refresh()
 	if typeof(size) ~= "number" then
 		return
 	end
-	for _, gate in gates do
-		setOpen(gate, size >= gate.zone.sizeRequired)
-	end
-end
-
-local function findGates()
-	local map = workspace:WaitForChild("Map", MAP_WAIT_SECONDS)
-	local zonesFolder = map and map:WaitForChild("Zones", MAP_WAIT_SECONDS)
+	local map = workspace:FindFirstChild("Map")
+	local zonesFolder = map and map:FindFirstChild("Zones")
 	if not zonesFolder then
-		warn("[ZoneGateController] Workspace.Map.Zones never appeared. Ice Gates won't open on this client.")
 		return
 	end
 	for _, zone in Config.Zones do
 		if zone.sizeRequired <= 0 then
 			continue
 		end
-		local path = "Workspace.Map.Zones." .. zone.folderName .. ".IceGate"
-		local folder = zonesFolder:WaitForChild(zone.folderName, MAP_WAIT_SECONDS)
-		local root = folder and folder:WaitForChild("IceGate", MAP_WAIT_SECONDS)
+		local folder = zonesFolder:FindFirstChild(zone.folderName)
+		local root = folder and folder:FindFirstChild("IceGate")
 		if not root then
-			warn("[ZoneGateController] Missing " .. path)
+			continue -- not streamed in yet (or missing; ZoneService warns about that on the server)
+		end
+		local parts = gateParts(root)
+		if #parts == 0 then
+			if not warned[zone.id] then
+				warned[zone.id] = true
+				warn(
+					"[ZoneGateController] Workspace.Map.Zones."
+						.. zone.folderName
+						.. ".IceGate has no BaseParts"
+				)
+			end
 			continue
 		end
-		local gate: Gate = {
-			zone = zone,
-			parts = collectParts(root),
-			original = {},
-			label = nil,
-			open = false,
-		}
-		if #gate.parts == 0 then
-			warn("[ZoneGateController] " .. path .. " has no BaseParts")
-			continue
+
+		local open = size >= zone.sizeRequired
+		for _, part in parts do
+			local original = originals[part]
+			if not original then
+				original = { transparency = part.Transparency, canCollide = part.CanCollide }
+				originals[part] = original
+			end
+			local wantCollide = if open then false else original.canCollide
+			local wantTransparency = if open then 1 else original.transparency
+			if part.CanCollide ~= wantCollide then
+				part.CanCollide = wantCollide
+			end
+			if part.Transparency ~= wantTransparency then
+				part.Transparency = wantTransparency
+			end
 		end
-		for _, part in gate.parts do
-			gate.original[part] = { transparency = part.Transparency, canCollide = part.CanCollide }
+		local label = ensureLabel(zone, root, parts)
+		if label then
+			label.Enabled = not open
 		end
-		gate.label = makeLabel(gate, root)
-		table.insert(gates, gate)
+
+		if open and not openZones[zone.id] then
+			ZoneGateController.GateShattered:Fire(zone.id)
+		end
+		openZones[zone.id] = open
 	end
 end
 
 function ZoneGateController.init() end
 
 function ZoneGateController.start()
-	findGates()
 	StateController.Changed:Connect(function(_state, changed)
 		if changed.Size ~= nil then
 			refresh()
 		end
 	end)
-	refresh()
+	task.spawn(function()
+		while true do
+			refresh()
+			task.wait(REFRESH_SECONDS)
+		end
+	end)
 end
 
 return ZoneGateController

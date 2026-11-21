@@ -1,5 +1,36 @@
 # Changelog
 
+## M4 — Heist
+
+**Added**
+- `Shared/HeistRules.luau` (pure, Lune-tested): steal checks covering owner, hold time, already carrying, on foot, lock, new-player protection for both sides, fresh Mythic, and full pedestals. Also lock timeline (Locked → Cooldown → Unlocked), bump protection and ball contact.
+- `StealService`:
+  - **Village:** inside `Workspace.Map.Village`, players are on foot (`OnFoot` attribute) and the snowball parks outside their gate.
+  - **Steal:** a server-timed 1.5 s hold on a rival's pedestal. The critter is welded above the thief's head and their walk speed drops from 20 to 12. They bank it by reaching their own gate; the owner tags it back by touching the thief.
+  - **Safety:** while it's being carried, the critter stays in the owner's save, hidden. A crash or a leaving or respawning thief returns it, and only a completed steal moves it.
+  - **Feedback:** steal alert and stolen toasts, plus `Stats.TotalSteals` and `TimesStolenFrom`. A per-server steal log is kept (`StealService.getLog()`).
+  - **Bumps:** a ball at least 1.5× bigger knocks one carried critter loose from a smaller one. Victims have a 5 s cooldown, and there's 10 s of protection after leaving the village. Knockback is applied by the victim's client through the `Bumped` remote.
+- `BaseService`: plot `Bounds` and `Barrier`, `RequestLockBase` (only inside your own igloo; 60 s lock, then a 10 s cooldown). Non-owners standing in a locked igloo are pushed out. Steal prompts sit on pedestals (key F) alongside Sell. `InPlot` attribute. Helper API for StealService.
+- `CritterService`: `spawnLoose` (grabbable by anyone regardless of size after 0.75 s, gone after 10 s). No absorbing while on foot.
+- Client:
+  - `HeistController`: the Lock button with countdown appears while inside your igloo. Your own barrier is passable through the local `OwnBarrier` collision group. Handles knockback.
+  - `BaseController`: shows Steal prompts to everyone except the owner.
+  - The snowball visual handles on-foot mode: character shown, ball parked, camera reset.
+- **Streaming-safe:** Studio places have instance streaming on by default, and a streamed-in part loses client-side changes. `ZoneGateController` and the barrier now re-apply their local state every tick instead of caching parts.
+- Placeholder map: `Village` box, and per-plot `Bounds` and `Barrier` (4 ice walls).
+- Dev hooks: `SkipProtection`, `DropCarried` (simulates being bumped).
+- Lune tests: 46 passing.
+
+**Expects in the place file:**
+- `Workspace.Map.Village` (BasePart covering the whole village, invisible, CanCollide off).
+- Per plot: `Bounds` (BasePart covering the igloo's inside) and `Barrier` (BasePart or Model; the server shows it and makes it solid while locked).
+
+**Known issues / notes**
+- Stealing, tag-back, bumping and the locked-door push-out need **2 players** (Test → Clients and Servers). The rules are covered by Lune tests; the single-player Studio run covered on-foot mode, locking, the owner passing their own barrier, prompt visibility, popped-loose critters and their expiry.
+- New-player protection (3 min) blocks steals in fresh test servers. Use `DevHooks.SkipProtection` on both players.
+- Knockback is applied by the victim's client, so it's cosmetic and an exploiter could ignore it. Nothing gameplay-relevant depends on it.
+- Walk speed is set by the server but enforced by the client (Roblox physics), so speed exploits are possible. A server-side speed check is a possible later hardening.
+
 ## M3 — Progress
 
 **Added**

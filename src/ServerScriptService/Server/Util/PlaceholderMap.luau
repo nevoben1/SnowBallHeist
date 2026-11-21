@@ -4,7 +4,8 @@
 --   Workspace.Map.VillageSpawn
 --   Workspace.Map.Zones.<folderName>.Bounds      (every zone)
 --   Workspace.Map.Zones.<folderName>.IceGate     (every zone with sizeRequired > 0)
---   Workspace.Map.Plots.Plot<N>.{Gate, CollectPad, Spawn, Pedestals.Pedestal<1..max>}
+--   Workspace.Map.Village                        (on-foot area)
+--   Workspace.Map.Plots.Plot<N>.{Gate, CollectPad, Spawn, Bounds, Barrier, Pedestals.Pedestal<1..max>}
 --   Workspace.Map.Leaderboards.{BiggestSnowball, MostMelts}
 -- The village (plots) rings the origin; zones run in a straight line along +Z past it.
 -- Layout numbers: Config.Dev.placeholderMap.
@@ -69,6 +70,33 @@ local function buildPlot(index: number, origin: CFrame, parent: Instance)
 	spawnPart.Transparency = 1
 	spawnPart.CanCollide = false
 
+	-- Bounds: the inside of the igloo (lock button works here; locked = outsiders pushed out).
+	local bounds = anchoredPart(
+		"Bounds",
+		Vector3.new(layout.plotSize, layout.plotWallHeight, layout.plotSize),
+		Vector3.zero,
+		plot
+	)
+	place(bounds, 0, layout.plotWallHeight / 2, 0)
+	bounds.Transparency = 1
+	bounds.CanCollide = false
+	bounds.CanQuery = false
+	bounds.CanTouch = false
+
+	-- Barrier: four ice walls around the plot. BaseService shows/solidifies them while locked.
+	local barrier = Instance.new("Model")
+	barrier.Name = "Barrier"
+	barrier.Parent = plot
+	local wall = layout.plotWallHeight
+	for side = 0, 3 do
+		local along = Vector3.new(layout.plotSize, wall, 1.5)
+		local part = anchoredPart("Wall" .. side, along, Vector3.zero, barrier)
+		local angle = side * math.pi / 2
+		local offset = Vector3.new(math.sin(angle), 0, math.cos(angle)) * half
+		part.CFrame = origin * CFrame.new(offset.X, wall / 2, offset.Z) * CFrame.Angles(0, angle, 0)
+		part.Material = Enum.Material.Ice
+	end
+
 	local pedestals = Instance.new("Folder")
 	pedestals.Name = "Pedestals"
 	pedestals.Parent = plot
@@ -95,6 +123,17 @@ function PlaceholderMap.build(): Folder
 	local spawnPoint = anchoredPart("VillageSpawn", Vector3.new(6, 1, 6), Vector3.new(0, 0.5, 0), map)
 	spawnPoint.CanCollide = false
 	spawnPoint.Transparency = 1
+
+	local village = anchoredPart(
+		"Village",
+		Vector3.new(layout.villageSize, 120, layout.villageSize),
+		Vector3.new(0, 60, 0),
+		map
+	)
+	village.Transparency = 1
+	village.CanCollide = false
+	village.CanQuery = false
+	village.CanTouch = false
 
 	local zonesFolder = Instance.new("Folder")
 	zonesFolder.Name = "Zones"

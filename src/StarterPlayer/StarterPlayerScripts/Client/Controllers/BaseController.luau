@@ -1,7 +1,7 @@
 --!strict
 -- Client side of the igloo (spec §6):
---   * Hides "owner only" prompts (Sell on pedestals) from everyone but their owner.
---     The server re-checks ownership; this is only so other players don't see them.
+--   * Hides "owner only" prompts (Sell on pedestals) from everyone but their owner, and Steal
+--     prompts from the owner. The server re-checks everything; this only tidies what you see.
 --   * "Pedestals full" offer to sell what you're carrying.
 --   * Offline earnings popup.
 
@@ -21,6 +21,12 @@ local localPlayer = Players.LocalPlayer
 local function applyOwnership(prompt: Instance)
 	if prompt:IsA("ProximityPrompt") then
 		prompt.Enabled = prompt:GetAttribute("OwnerUserId") == localPlayer.UserId
+	end
+end
+
+local function applyThief(prompt: Instance)
+	if prompt:IsA("ProximityPrompt") then
+		prompt.Enabled = prompt:GetAttribute("OwnerUserId") ~= localPlayer.UserId
 	end
 end
 
@@ -52,6 +58,10 @@ function BaseController.start()
 		applyOwnership(prompt)
 	end
 	CollectionService:GetInstanceAddedSignal(Net.Tags.OwnerPrompt):Connect(applyOwnership)
+	for _, prompt in CollectionService:GetTagged(Net.Tags.ThiefPrompt) do
+		applyThief(prompt)
+	end
+	CollectionService:GetInstanceAddedSignal(Net.Tags.ThiefPrompt):Connect(applyThief)
 
 	local requestSellCarried = Net.event("RequestSellCarried")
 	Net.event("PromptSellCarried").OnClientEvent:Connect(function(count: number, value: number)

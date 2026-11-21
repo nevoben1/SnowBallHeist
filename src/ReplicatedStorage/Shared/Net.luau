@@ -17,12 +17,13 @@ local EVENTS = {
 	"PlayerStateChanged", -- (partialState: table) a snapshot of changed public fields
 	"Notify", -- (kind: string, message: string) toast
 	"PromptSellCarried", -- (count: number, value: number) pedestals full while banking
+	"Bumped", -- (direction: Vector3) you were bumped: client applies the knockback
 	-- client → server (requests)
 	"RequestSellCarried", -- () sell everything you're carrying; only at your own gate
 	"RequestBuyUpgrade", -- (upgradeId: string)
 	"RequestMelt", -- ()
 	"RequestEquipSkin", -- (skinId: string)
-	-- Later: "RequestLockBase"
+	"RequestLockBase", -- () lock your igloo; only while standing inside it
 }
 
 local FUNCTIONS = {
@@ -38,11 +39,21 @@ Net.Attributes = {
 	Carried = "Carried", -- CarryCodec string
 	Plot = "Plot", -- name of the player's igloo plot
 	Skin = "Skin", -- equipped skin id
+	OnFoot = "OnFoot", -- true inside the village: walking, snowball parked at the igloo gate
+	InPlot = "InPlot", -- name of the plot the player is standing in ("" if none)
+}
+
+-- Collision groups (registered by the server in BaseService.init).
+Net.CollisionGroups = {
+	-- Collides with nothing. Each client puts its OWN igloo barrier in it locally, so the owner
+	-- walks through their locked door while everyone else bumps into it.
+	OwnBarrier = "OwnBarrier",
 }
 
 -- CollectionService tags.
 Net.Tags = {
 	OwnerPrompt = "OwnerPrompt", -- ProximityPrompt only its OwnerUserId attribute's player should see
+	ThiefPrompt = "ThiefPrompt", -- ProximityPrompt everyone EXCEPT its OwnerUserId should see
 }
 
 local folder: Folder? = nil

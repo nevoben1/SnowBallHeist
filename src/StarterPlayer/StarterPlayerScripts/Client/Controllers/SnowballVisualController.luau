@@ -5,7 +5,8 @@
 -- Formulas.visualRadius. Physics stay on the normal small character.
 --
 -- Carried critters (the "Carried" player attribute) are stuck to the ball's surface and roll
--- with it.
+-- with it. Inside the village ("OnFoot" attribute, spec §3) the player walks normally and the
+-- ball sits parked outside their igloo gate.
 --
 -- The "Skin" player attribute picks the look: ReplicatedStorage.Assets.Skins.<id> if it exists,
 -- otherwise the base snowball recolored with the skin's Config color + material.
@@ -34,6 +35,7 @@ type Ball = {
 	carriedText: string, -- the attribute value the carried models were built from
 	carriedModels: { Model },
 	skin: string,
+	parked: boolean?, -- nil until the first frame, so the first state always applies
 }
 
 -- A jump bigger than this many radii in one frame is a teleport/respawn, not rolling.
@@ -99,19 +101,62 @@ local function makePart(skinId: string): BasePart
 	return part
 end
 
--- Hides a character on this client only (client-side property changes don't replicate).
+-- Shows/hides a character on this client only (client-side property changes don't replicate).
 -- Uses Transparency, not LocalTransparencyModifier: Roblox's camera scripts overwrite that one
 -- on your own character when you zoom. Accessories load after spawn, so watch for new parts too.
-local function hideCharacter(character: Model)
-	local function apply(item: Instance)
+type Visibility = { hidden: boolean, originals: { [Instance]: number } }
+local visibility: { [Model]: Visibility } = setmetatable({}, { __mode = "k" }) :: any
+
+local function setCharacterHidden(character: Model, hidden: boolean)
+	local state = visibility[character]
+	if not state then
+		local newState: Visibility = { hidden = false, originals = {} }
+		state = newState
+		visibility[character] = newState
+		character.DescendantAdded:Connect(function(item) -- disconnects when the character is destroyed
+			if newState.hidden and (item:IsA("BasePart") or item:IsA("Decal")) then
+				newState.originals[item] = (item :: any).Transparency;
+				(item :: any).Transparency = 1
+			end
+		end)
+	end
+	if state.hidden == hidden then
+		return
+	end
+	state.hidden = hidden
+	for _, item in character:GetDescendants() do
 		if item:IsA("BasePart") or item:IsA("Decal") then
-			item.Transparency = 1
+			if hidden then
+				state.originals[item] = (item :: any).Transparency;
+				(item :: any).Transparency = 1
+			elseif state.originals[item] ~= nil then
+				(item :: any).Transparency = state.originals[item]
+			end
 		end
 	end
-	for _, item in character:GetDescendants() do
-		apply(item)
+	if not hidden then
+		table.clear(state.originals)
 	end
-	character.DescendantAdded:Connect(apply) -- disconnected automatically when the character is destroyed
+end
+
+-- Where a player's ball waits while they're on foot: just outside their igloo gate.
+local function parkingSpot(player: Player, radius: number): Vector3?
+	local plotName = player:GetAttribute(Net.Attributes.Plot)
+	local map = workspace:FindFirstChild("Map")
+	local plots = map and map:FindFirstChild("Plots")
+	local plot = plots and typeof(plotName) == "string" and plots:FindFirstChild(plotName)
+	local gate = plot and plot:FindFirstChild("Gate")
+	if not (gate and gate:IsA("BasePart")) then
+		return nil
+	end
+	local bounds = (plot :: Instance):FindFirstChild("Bounds")
+	local outward = if bounds and bounds:IsA("BasePart")
+		then gate.Position - bounds.Position
+		else Vector3.zero
+	outward = Vector3.new(outward.X, 0, outward.Z)
+	local offset = if outward.Magnitude > 1e-3 then outward.Unit * (radius + 4) else Vector3.zero
+	local ground = gate.Position.Y - gate.Size.Y / 2
+	return Vector3.new(gate.Position.X + offset.X, ground + radius, gate.Position.Z + offset.Z)
 end
 
 local function skinOf(player: Player): string
@@ -193,6 +238,12 @@ local function placeCarried(ball: Ball, center: Vector3)
 	end
 end
 
+local function resetCamera(humanoid: Humanoid)
+	localPlayer.CameraMinZoomDistance = 0.5
+	localPlayer.CameraMaxZoomDistance = Config.Visuals.cameraDefaultMaxZoom
+	humanoid.CameraOffset = Vector3.zero
+end
+
 local function updateCamera(radius: number, humanoid: Humanoid, centerY: number, rootY: number)
 	local visuals = Config.Visuals
 	local minZoom = radius * visuals.cameraMinZoomPerRadius
@@ -225,8 +276,17 @@ local function updateBall(player: Player, dt: number)
 	if newCharacter then
 		ball.hiddenCharacter = character
 		ball.lastPosition = nil
-		if Config.Visuals.hideCharacterInsideSnowball then
-			hideCharacter(character)
+		ball.parked = nil
+	end
+
+	local onFoot = player:GetAttribute(Net.Attributes.OnFoot) == true
+	local modeChanged = ball.parked ~= onFoot
+	if modeChanged then
+		ball.parked = onFoot
+		ball.lastPosition = nil
+		setCharacterHidden(character, Config.Visuals.hideCharacterInsideSnowball and not onFoot)
+		if player == localPlayer and onFoot then
+			resetCamera(humanoid)
 		end
 	end
 
@@ -236,10 +296,20 @@ local function updateBall(player: Player, dt: number)
 	local alpha = math.min(1, dt * Config.Visuals.snowballGrowSpeed)
 	ball.radius += (target - ball.radius) * alpha
 
-	-- Sit the ball on the ground under the character's feet.
+	-- Sit the ball on the ground under the character's feet, or parked at the igloo on foot.
 	local rootPosition = root.Position
-	local feetY = rootPosition.Y - root.Size.Y / 2 - humanoid.HipHeight
-	local center = Vector3.new(rootPosition.X, feetY + ball.radius, rootPosition.Z)
+	local center: Vector3
+	if onFoot then
+		local spot = parkingSpot(player, ball.radius)
+		if not spot then
+			ball.part.Parent = nil -- no plot yet: nothing to draw
+			return
+		end
+		center = spot
+	else
+		local feetY = rootPosition.Y - root.Size.Y / 2 - humanoid.HipHeight
+		center = Vector3.new(rootPosition.X, feetY + ball.radius, rootPosition.Z)
+	end
 
 	-- Roll: turn by (distance travelled / radius) around the axis perpendicular to the motion.
 	local last = ball.lastPosition
@@ -263,7 +333,7 @@ local function updateBall(player: Player, dt: number)
 	placeCarried(ball, center)
 
 	-- Camera settings only change with the radius (or a fresh Humanoid after respawn).
-	if player == localPlayer and (resized or newCharacter) then
+	if player == localPlayer and not onFoot and (resized or modeChanged) then
 		updateCamera(ball.radius, humanoid, center.Y, rootPosition.Y)
 	end
 end

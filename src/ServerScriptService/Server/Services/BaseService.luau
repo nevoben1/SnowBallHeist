@@ -9,8 +9,13 @@
 --     .CollectPad    BasePart  walk onto it to collect income
 --     .Pedestals     Folder of BaseParts named Pedestal1..Pedestal24 (top surface holds a critter)
 --     .Spawn         BasePart  (optional) where the owner appears on join/respawn
+--     .Bounds        BasePart  the inside of the igloo (lock works here; locked = outsiders pushed out)
+--     .Barrier       BasePart or Model; shown + solid while locked (the owner walks through it)
+--
+-- Stealing itself lives in StealService; this service owns the plots and pedestals it touches.
 
 local HttpService = game:GetService("HttpService")
+local PhysicsService = game:GetService("PhysicsService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CollectionService = game:GetService("CollectionService")
@@ -21,7 +26,9 @@ local CritterLook = require(Shared.CritterLook)
 local DataTemplate = require(Shared.DataTemplate)
 local Format = require(Shared.Format)
 local Formulas = require(Shared.Formulas)
+local HeistRules = require(Shared.HeistRules)
 local Net = require(Shared.Net)
+local Signal = require(Shared.Signal)
 local CritterService = require(script.Parent.CritterService)
 local DataService = require(script.Parent.DataService)
 local DevHooks = require(script.Parent.Parent.Util.DevHooks)
@@ -29,9 +36,15 @@ local MapLocator = require(script.Parent.Parent.Util.MapLocator)
 local RateLimiter = require(script.Parent.Parent.Util.RateLimiter)
 
 type PlayerData = DataTemplate.PlayerData
+type BankedCritter = DataTemplate.BankedCritter
 
 type Plot = {
 	name: string,
+	model: Instance,
+	bounds: BasePart?,
+	barrierParts: { BasePart },
+	lockedUntil: number, -- workspace:GetServerTimeNow() seconds
+	cooldownUntil: number,
 	gate: BasePart,
 	pad: BasePart,
 	spawn: BasePart?,
@@ -45,6 +58,10 @@ type Plot = {
 
 local BaseService = {}
 
+-- Fires (thief, owner, critterUid, heldForSeconds) when someone finishes a Steal prompt.
+-- StealService decides whether it counts.
+BaseService.StealPromptTriggered = Signal.new() :: Signal.Signal<Player, Player, string, number>
+
 local plots: { Plot } = {}
 local plotOf: { [Player]: Plot } = {}
 local atGate: { [Player]: boolean } = {}
@@ -52,6 +69,16 @@ local onPad: { [Player]: boolean } = {}
 local notify: RemoteEvent
 local promptSellCarried: RemoteEvent
 local sellLimiter = RateLimiter.new(3, 1)
+local lockLimiter = RateLimiter.new(Config.Economy.requestRateLimit, 1)
+-- Critters being carried off by a thief: still in the owner's save (so a crash can't lose them)
+-- but hidden from the pedestal, income and selling until the steal finishes or fails.
+local inTransit: { [string]: boolean } = {}
+-- When each player started holding a Steal prompt (server clock), to time the hold ourselves.
+local holdStarted: { [Player]: number } = {}
+
+local function now(): number
+	return workspace:GetServerTimeNow()
+end
 
 local function trailingNumber(name: string): number
 	return tonumber(string.match(name, "%d+$")) or math.huge
@@ -60,6 +87,8 @@ end
 local function byTrailingNumber(a: Instance, b: Instance): boolean
 	return trailingNumber(a.Name) < trailingNumber(b.Name)
 end
+
+local setBarrier: (plot: Plot, locked: boolean) -> ()
 
 local function makeBillboard(adornee: BasePart, height: number, color: Color3): TextLabel
 	local billboard = Instance.new("BillboardGui")
@@ -77,6 +106,20 @@ local function makeBillboard(adornee: BasePart, height: number, color: Color3): 
 	label.Parent = billboard
 	billboard.Parent = adornee
 	return label
+end
+
+-- Locked: ice walls visible and solid for everyone (the owner's client makes them passable for
+-- itself). Plot attributes let clients show the countdown.
+setBarrier = function(plot: Plot, locked: boolean)
+	local color = Config.Visuals.barrierColor
+	for _, part in plot.barrierParts do
+		part.CanCollide = locked
+		part.CanQuery = false
+		part.Transparency = if locked then Config.Visuals.barrierTransparency else 1
+		part.Color = Color3.fromRGB(color[1], color[2], color[3])
+	end
+	plot.model:SetAttribute("LockedUntil", plot.lockedUntil)
+	plot.model:SetAttribute("CooldownUntil", plot.cooldownUntil)
 end
 
 local function resolvePlots()
@@ -125,6 +168,25 @@ local function resolvePlots()
 			)
 		end
 		local spawnPart = plotModel:FindFirstChild("Spawn")
+		local boundsPart = plotModel:FindFirstChild("Bounds")
+		if not (boundsPart and boundsPart:IsA("BasePart")) then
+			warn("[BaseService] Missing " .. path .. ".Bounds (BasePart). Locking is disabled for this plot.")
+			boundsPart = nil
+		end
+		local barrierParts: { BasePart } = {}
+		local barrier = plotModel:FindFirstChild("Barrier")
+		if barrier then
+			if barrier:IsA("BasePart") then
+				table.insert(barrierParts, barrier)
+			end
+			for _, item in barrier:GetDescendants() do
+				if item:IsA("BasePart") then
+					table.insert(barrierParts, item)
+				end
+			end
+		else
+			warn("[BaseService] Missing " .. path .. ".Barrier (BasePart or Model). Locks won't show a wall.")
+		end
 
 		local critterFolder = Instance.new("Folder")
 		critterFolder.Name = "Critters"
@@ -132,6 +194,11 @@ local function resolvePlots()
 
 		local plot: Plot = {
 			name = plotModel.Name,
+			model = plotModel,
+			bounds = boundsPart :: BasePart?,
+			barrierParts = barrierParts,
+			lockedUntil = 0,
+			cooldownUntil = 0,
 			gate = gate,
 			pad = pad,
 			spawn = if spawnPart and spawnPart:IsA("BasePart") then spawnPart else nil,
@@ -148,6 +215,7 @@ local function resolvePlots()
 		plot.signLabel.Text = "Empty Igloo"
 		plot.padLabel.Text = "COLLECT"
 		table.insert(plots, plot)
+		setBarrier(plot, false)
 	end
 	if #plots < Config.Economy.maxPlayersPerServer then
 		warn(
@@ -195,6 +263,17 @@ local function critterIncome(data: PlayerData, critterId: string, mutation: stri
 	)
 end
 
+-- Banked critters that are actually on their pedestal (not being carried off by a thief).
+local function presentCritters(data: PlayerData): { BankedCritter }
+	local list = {}
+	for _, critter in data.Critters do
+		if not inTransit[critter.Id] then
+			table.insert(list, critter)
+		end
+	end
+	return list
+end
+
 function BaseService.getIncomePerSecond(player: Player): number
 	local data = DataService.getData(player)
 	if not data then
@@ -204,7 +283,7 @@ function BaseService.getIncomePerSecond(player: Player): number
 		Config.Economy,
 		Config.Critters.byId,
 		Config.Critters.mutations,
-		data.Critters,
+		presentCritters(data),
 		data.Melts,
 		1
 	)
@@ -271,6 +350,9 @@ local function renderPlot(plot: Plot)
 		if not pedestal then
 			break
 		end
+		if inTransit[critter.Id] then
+			continue -- a thief is carrying it; the pedestal stays empty
+		end
 		local model = CritterLook.build(critter.CritterId, critter.Mutation)
 		local _, extents = model:GetBoundingBox()
 		local top = pedestal.CFrame * CFrame.new(0, pedestal.Size.Y / 2 + extents.Y / 2, 0)
@@ -291,6 +373,27 @@ local function renderPlot(plot: Plot)
 			sellBanked(player, critterUid)
 		end)
 		prompt.Parent = model.PrimaryPart
+
+		-- Everyone else sees a Steal prompt (BaseController hides each prompt from the wrong people).
+		local steal = Instance.new("ProximityPrompt")
+		steal.ActionText = "Steal"
+		steal.ObjectText = prompt.ObjectText
+		steal.HoldDuration = Config.Economy.stealHoldSeconds
+		steal.MaxActivationDistance = Config.Economy.stealPromptDistance
+		steal.RequiresLineOfSight = false
+		steal.KeyboardKeyCode = Enum.KeyCode.F
+		steal:SetAttribute("OwnerUserId", owner.UserId)
+		CollectionService:AddTag(steal, Net.Tags.ThiefPrompt)
+		steal.PromptButtonHoldBegan:Connect(function(player)
+			holdStarted[player] = os.clock()
+		end)
+		steal.Triggered:Connect(function(player)
+			local started = holdStarted[player]
+			holdStarted[player] = nil
+			local heldFor = if started then os.clock() - started else 0
+			BaseService.StealPromptTriggered:Fire(player, owner, critterUid, heldFor)
+		end)
+		steal.Parent = model.PrimaryPart
 
 		model.Parent = plot.critterFolder
 	end
@@ -373,7 +476,7 @@ sellBanked = function(player: Player, critterUid: string)
 		return
 	end
 	for index, critter in data.Critters do
-		if critter.Id ~= critterUid then
+		if critter.Id ~= critterUid or inTransit[critterUid] then
 			continue
 		end
 		local pedestal = plot.pedestals[index]
@@ -495,6 +598,9 @@ local function releasePlot(player: Player)
 	onPad[player] = nil
 	if plot then
 		plot.owner = nil
+		plot.lockedUntil = 0
+		plot.cooldownUntil = 0
+		setBarrier(plot, false)
 		plot.signLabel.Text = "Empty Igloo"
 		plot.padLabel.Text = "COLLECT"
 		renderPlot(plot)
@@ -503,7 +609,89 @@ end
 
 -- Loops -----------------------------------------------------------------------------------------
 
+local function plotContaining(position: Vector3): Plot?
+	for _, plot in plots do
+		local bounds = plot.bounds
+		if bounds then
+			local localPos = bounds.CFrame:PointToObjectSpace(position)
+			local half = bounds.Size / 2
+			if
+				math.abs(localPos.X) <= half.X
+				and math.abs(localPos.Y) <= half.Y
+				and math.abs(localPos.Z) <= half.Z
+			then
+				return plot
+			end
+		end
+	end
+	return nil
+end
+
+-- Outside the plot, just past its gate (pushed away from the plot's center).
+local function pushOut(player: Player, plot: Plot)
+	local character = player.Character
+	local bounds = plot.bounds
+	if not (character and bounds) then
+		return
+	end
+	local outward = plot.gate.Position - bounds.Position
+	outward = Vector3.new(outward.X, 0, outward.Z)
+	if outward.Magnitude < 1e-3 then
+		outward = Vector3.zAxis
+	end
+	local reach = math.max(bounds.Size.X, bounds.Size.Z) / 2 + 6
+	local target = bounds.Position + outward.Unit * reach
+	character:PivotTo(
+		CFrame.new(target.X, plot.gate.Position.Y + character:GetExtentsSize().Y / 2 + 1, target.Z)
+	)
+end
+
+local function checkPlotPresence()
+	local time = now()
+	for _, player in Players:GetPlayers() do
+		local root = rootOf(player)
+		local inside = if root then plotContaining(root.Position) else nil
+		player:SetAttribute(Net.Attributes.InPlot, if inside then inside.name else "")
+		if
+			inside
+			and inside.owner ~= player
+			and HeistRules.lockState(time, inside.lockedUntil, inside.cooldownUntil) == "Locked"
+		then
+			pushOut(player, inside)
+			notify:FireClient(player, "IglooLocked", "That igloo is locked!")
+		end
+	end
+end
+
+local function lockBase(player: Player)
+	if not lockLimiter:allow(player) then
+		return
+	end
+	local plot = plotOf[player]
+	local root = rootOf(player)
+	if not (plot and root and plot.bounds) or plotContaining(root.Position) ~= plot then
+		notify:FireClient(player, "LockDenied", "Stand inside your igloo to lock it")
+		return
+	end
+	local time = now()
+	local state = HeistRules.lockState(time, plot.lockedUntil, plot.cooldownUntil)
+	if state ~= "Unlocked" then
+		return
+	end
+	-- VIP gamepass (M5) gets the longer lock.
+	plot.lockedUntil, plot.cooldownUntil = HeistRules.lockTimes(Config.Economy, time, false)
+	setBarrier(plot, true)
+	notify:FireClient(player, "Locked", "Igloo locked!")
+	local lockedUntil = plot.lockedUntil
+	task.delay(plot.lockedUntil - time, function()
+		if plot.lockedUntil == lockedUntil then
+			setBarrier(plot, false)
+		end
+	end)
+end
+
 local function checkTriggers()
+	checkPlotPresence()
 	for player, plot in plotOf do
 		local root = rootOf(player)
 		if not root then
@@ -534,7 +722,7 @@ local function incomeTick()
 			continue
 		end
 		local seconds = Config.Economy.tickSeconds
-		for _, critter in data.Critters do
+		for _, critter in presentCritters(data) do
 			critter.Pending += critterIncome(data, critter.CritterId, critter.Mutation) * seconds
 		end
 		if onPad[player] then
@@ -563,14 +751,98 @@ function BaseService.sendHome(player: Player)
 	moveToPlot(player)
 end
 
+function BaseService.lockStateOf(owner: Player): HeistRules.LockState
+	local plot = plotOf[owner]
+	if not plot then
+		return "Unlocked"
+	end
+	return HeistRules.lockState(now(), plot.lockedUntil, plot.cooldownUntil)
+end
+
+-- A banked critter and the pedestal it sits on (nil if it's gone or already in transit).
+function BaseService.findBanked(owner: Player, critterUid: string): (BankedCritter?, BasePart?)
+	local data = DataService.getData(owner)
+	local plot = plotOf[owner]
+	if not (data and plot) then
+		return nil, nil
+	end
+	for index, critter in data.Critters do
+		if critter.Id == critterUid and not inTransit[critterUid] then
+			return critter, plot.pedestals[index]
+		end
+	end
+	return nil, nil
+end
+
+-- Hide/show a critter while a thief carries it (it stays in the owner's save until the steal completes).
+function BaseService.setInTransit(owner: Player, critterUid: string, carried: boolean)
+	inTransit[critterUid] = if carried then true else nil
+	BaseService.refresh(owner)
+end
+
+-- Removes a banked critter from its owner's save. Returns it, or nil if it's gone.
+function BaseService.removeBanked(owner: Player, critterUid: string): BankedCritter?
+	local data = DataService.getData(owner)
+	if not data then
+		return nil
+	end
+	for index, critter in data.Critters do
+		if critter.Id == critterUid then
+			table.remove(data.Critters, index)
+			inTransit[critterUid] = nil
+			BaseService.refresh(owner)
+			return critter
+		end
+	end
+	return nil
+end
+
+function BaseService.freePedestals(player: Player): number
+	local data = DataService.getData(player)
+	local plot = plotOf[player]
+	if not (data and plot) then
+		return 0
+	end
+	local unlocked =
+		math.min(Formulas.pedestalCount(Config.Economy, data.Upgrades.Pedestals), #plot.pedestals)
+	return unlocked - #data.Critters
+end
+
+-- Puts a critter straight onto a free pedestal (a completed steal). Returns false if full.
+function BaseService.addBanked(player: Player, critterId: string, mutation: string): boolean
+	local data = DataService.getData(player)
+	if not data or BaseService.freePedestals(player) <= 0 then
+		return false
+	end
+	table.insert(data.Critters, {
+		Id = HttpService:GenerateGUID(false),
+		CritterId = critterId,
+		Mutation = mutation :: any,
+		BankedAt = os.time(),
+		Pending = 0,
+	})
+	BaseService.refresh(player)
+	return true
+end
+
+function BaseService.isOnOwnGate(player: Player): boolean
+	local plot = plotOf[player]
+	local root = rootOf(player)
+	return plot ~= nil and root ~= nil and isOn(plot.gate, root.Position)
+end
+
 -- Lifecycle -------------------------------------------------------------------------------------
 
 function BaseService.init()
 	notify = Net.event("Notify")
 	promptSellCarried = Net.event("PromptSellCarried")
+	local group = Net.CollisionGroups.OwnBarrier
+	PhysicsService:RegisterCollisionGroup(group)
+	PhysicsService:CollisionGroupSetCollidable(group, "Default", false)
 	resolvePlots()
 
 	Net.event("RequestSellCarried").OnServerEvent:Connect(sellCarried)
+	Net.event("RequestLockBase").OnServerEvent:Connect(lockBase)
 
 	-- game.ServerStorage.DevHooks.SetCoins:Invoke(game.Players.YourName, 1e6)
 	DevHooks.register("SetCoins", function(player, coins)
@@ -598,7 +870,10 @@ function BaseService.start()
 			grantOfflineEarnings(player, os.time() - lastOnline)
 		end
 	end)
-	Players.PlayerRemoving:Connect(releasePlot)
+	Players.PlayerRemoving:Connect(function(player)
+		holdStarted[player] = nil
+		releasePlot(player)
+	end)
 
 	task.spawn(function()
 		while true do

@@ -84,6 +84,9 @@ local Economy = {
 	walkSpeed = 20,
 	carryWalkSpeed = 12,
 	stealHoldSeconds = 1.5,
+	stealHoldToleranceSeconds = 0.25, -- network jitter allowance when the server times the hold
+	stealPromptDistance = 8,
+	tagBackDistance = 6, -- owner this close to the thief snaps the critter back
 	lockSeconds = 60,
 	vipLockSeconds = 90,
 	lockCooldownSeconds = 10,
@@ -95,6 +98,9 @@ local Economy = {
 	bumpCooldownSeconds = 5,
 	looseCritterSeconds = 10,
 	leaveVillageProtectionSeconds = 10,
+	bumpKnockback = 70, -- studs/second pushed away (cartoon knockback, no damage)
+	bumpKnockbackUp = 30,
+	looseGrabDelaySeconds = 0.75, -- a popped-loose critter can't be grabbed instantly
 
 	-- §11 Leaderboards
 	globalLeaderboardRefreshSeconds = 60,

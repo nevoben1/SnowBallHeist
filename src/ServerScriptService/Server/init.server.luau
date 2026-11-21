@@ -20,7 +20,7 @@ local SERVICE_ORDER = {
 	"UpgradeService",
 	"RebirthService",
 	"LeaderboardService",
-	-- M4: "StealService"
+	"StealService",
 	-- M5: "ShopService"
 	-- M6: "EventService", "CodeService", "AdminService"
 }

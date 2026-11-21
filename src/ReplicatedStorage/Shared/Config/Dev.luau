@@ -33,6 +33,8 @@ return {
 		plotSize = 60,
 		pedestalColumns = 6,
 		pedestalSpacing = 8,
+		villageSize = 400, -- square Village box around the origin (on-foot area)
+		plotWallHeight = 14,
 		leaderboardDistance = 40, -- global boards stand this far from the village center, facing it
 	},
 }
