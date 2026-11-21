@@ -19,18 +19,28 @@ export type Product = {
 
 local Monetization = {
 	gamePasses = {
-		TwoXGrowth = { key = "TwoXGrowth", id = 0, priceRobux = 249, description = "Doubles size growth" },
-		TwoXCoins = { key = "TwoXCoins", id = 0, priceRobux = 299, description = "Doubles income" },
-		VIP = { key = "VIP", id = 0, priceRobux = 399, description = "90s lock, chat tag, VIP trail" },
+		TwoXGrowth = {
+			key = "TwoXGrowth",
+			id = 2092757276,
+			priceRobux = 249,
+			description = "Doubles size growth",
+		},
+		TwoXCoins = { key = "TwoXCoins", id = 2097239157, priceRobux = 299, description = "Doubles income" },
+		VIP = {
+			key = "VIP",
+			id = 2092643393,
+			priceRobux = 399,
+			description = "90s lock, chat tag, VIP trail",
+		},
 		ExtraCarrySlots = {
 			key = "ExtraCarrySlots",
-			id = 0,
+			id = 2097125114,
 			priceRobux = 199,
 			description = "+2 carry slots",
 		},
 		AutoCollect = {
 			key = "AutoCollect",
-			id = 0,
+			id = 2096791209,
 			priceRobux = 349,
 			description = "Income collects automatically",
 		},
